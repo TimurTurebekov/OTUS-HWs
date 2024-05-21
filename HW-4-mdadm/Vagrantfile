@@ -1,0 +1,18 @@
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/ubuntu2004" # используем базовый образ Ubuntu 20.04
+  config.vm.provider "virtualbox" do |vb|
+    vb.memory = "1024"
+    vb.cpus = 2
+
+    # Создание виртуальных дисков
+    (1..4).each do |i|
+      unless File.exist?("disk#{i}.vdi")
+        vb.customize ['createhd', '--filename', "disk#{i}.vdi", '--size', 2048]
+      end
+      vb.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', i, '--device', 0, '--type', 'hdd', '--medium', "disk#{i}.vdi"]
+    end
+  end
+
+  # Скрипт для настройки RAID
+  config.vm.provision "shell", path: "setup_raid.sh"
+end
