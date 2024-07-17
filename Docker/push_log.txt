@@ -1,0 +1,15 @@
+The push refers to repository [docker.io/timurturebekov/custom-nginx]
+b39f7913b99e: Preparing
+98e5cc2eec69: Preparing
+e0e747229517: Preparing
+3281b7b09ca0: Preparing
+eb0b050f7bb0: Preparing
+5ccc0877b840: Preparing
+7d8ec7787b4e: Preparing
+3412cc8c9e99: Preparing
+af9a70194aa4: Preparing
+5ccc0877b840: Waiting
+7d8ec7787b4e: Waiting
+3412cc8c9e99: Waiting
+af9a70194aa4: Waiting
+denied: requested access to the resource is denied
