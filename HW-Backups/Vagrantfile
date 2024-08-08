@@ -1,0 +1,112 @@
+Vagrant.configure("2") do |config|
+  # Base VM OS configuration.
+  config.vm.box = "bento/ubuntu-22.04"
+  config.vm.provider :virtualbox do |v|
+    v.memory = 1512
+    v.cpus = 2
+  end
+
+  # Define two VMs with static private IP addresses.
+  boxes = [
+    { name: "backup-server", ip: "192.168.11.160" },
+    { name: "client", ip: "192.168.11.150" }
+  ]
+
+  # Provision each of the VMs.
+  boxes.each do |opts|
+    config.vm.define opts[:name] do |config|
+      config.vm.hostname = opts[:name]
+      config.vm.network "private_network", ip: opts[:ip]
+
+      config.vm.provision "shell", inline: <<-SHELL
+        # Установка BorgBackup и sshpass
+        sudo apt-get update
+        sudo apt-get install -y borgbackup sshpass
+
+        # Создание пользователя borg и установка пароля
+        if ! id "borg" &>/dev/null; then
+          sudo useradd -m -s /bin/bash borg
+          echo "borg:1" | sudo chpasswd
+        fi
+
+        # Настройка SSH для пользователя borg
+        sudo mkdir -p /home/borg/.ssh
+        sudo chmod 700 /home/borg/.ssh
+        sudo chown borg:borg /home/borg/.ssh
+
+        # Генерация SSH-ключа для пользователя borg, если его еще нет
+        if [ ! -f /home/borg/.ssh/id_ed25519 ]; then
+          sudo -u borg ssh-keygen -t ed25519 -f /home/borg/.ssh/id_ed25519 -N ""
+          sudo -u borg cat /home/borg/.ssh/id_ed25519.pub >> /home/borg/.ssh/authorized_keys
+        fi
+        sudo chmod 600 /home/borg/.ssh/authorized_keys
+        sudo chown borg:borg /home/borg/.ssh/authorized_keys
+
+        # Создание и монтирование точки для резервных копий
+        if [ "#{opts[:name]}" == "backup-server" ]; then
+          if ! mountpoint -q /var/backup; then
+            sudo mkdir -p /var/backup
+            sudo fallocate -l 2G /var/backup.img
+            sudo mkfs.ext4 /var/backup.img
+            sudo mount /var/backup.img /var/backup
+            echo '/var/backup.img /var/backup ext4 defaults 0 0' | sudo tee -a /etc/fstab
+
+            # Установка прав на /var/backup
+            sudo chown -R borg:borg /var/backup
+            sudo chmod -R 700 /var/backup
+          fi
+
+          # Инициализация репозитория Borg, если он еще не инициализирован
+          if [ ! -f /var/backup/config ]; then
+            sudo -u borg borg init --encryption=repokey /var/backup
+          fi
+        fi
+      SHELL
+
+      # Дополнительные настройки для client
+      if opts[:name] == "client"
+        config.vm.provision "shell", inline: <<-SHELL
+          # Генерация SSH-ключа для пользователя vagrant, если его нет
+          if [ ! -f /home/vagrant/.ssh/id_ed25519 ]; then
+            sudo -u vagrant ssh-keygen -t ed25519 -f /home/vagrant/.ssh/id_ed25519 -N ""
+          fi
+
+          # Копирование SSH-ключа на сервер backup-server
+          sudo -u vagrant ssh-keyscan 192.168.11.160 >> ~/.ssh/known_hosts
+          sudo sshpass -p "1" ssh-copy-id -i /home/vagrant/.ssh/id_ed25519.pub borg@192.168.11.160
+
+          # Настройка systemd службы и таймера для автоматического бэкапа
+          sudo bash -c 'cat << EOF > /etc/systemd/system/borg-backup.service
+[Unit]
+Description=Borg Backup
+
+[Service]
+Type=oneshot
+Environment="BORG_PASSPHRASE=1"
+Environment=REPO=borg@192.168.11.160:/var/backup/
+Environment=BACKUP_TARGET=/etc
+ExecStart=/usr/bin/borg create --stats \${REPO}::etc-{now:%%Y-%%m-%%d_%%H:%%M:%%S} \${BACKUP_TARGET}
+ExecStart=/usr/bin/borg prune --keep-daily 90 --keep-monthly 12 --keep-yearly 1 \${REPO}
+EOF'
+
+          sudo bash -c 'cat << EOF > /etc/systemd/system/borg-backup.timer
+[Unit]
+Description=Run Borg Backup service periodically
+
+[Timer]
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF'
+
+          # Запуск и включение таймера
+          sudo systemctl daemon-reload
+          sudo systemctl enable borg-backup.timer
+          sudo systemctl start borg-backup.timer
+        SHELL
+      end
+    end
+  end
+end
